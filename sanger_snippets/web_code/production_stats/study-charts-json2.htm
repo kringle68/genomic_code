@@ -1,0 +1,280 @@
+<!DOCTYPE HTML>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>Production Statistics</title>
+		
+		
+		<!-- 1. Add these JavaScript inclusions in the head of your page -->
+		<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.1/jquery.min.js"></script>
+		<script type="text/javascript" src="/Teams/Team145/dev/js/new/js/highcharts.js"></script>
+		
+		<!-- 1a) Optional: add a theme file -->
+		
+		<script type="text/javascript" src="/Teams/Team145/dev/js/new/js/themes/grid.js"></script>
+		
+		
+		<!-- 1b) Optional: the exporting module -->
+		<script type="text/javascript" src="/Teams/Team145/dev/js/new/js/modules/exporting.js"></script>
+		
+		
+		<!-- 2. Add the JavaScript to initialize the chart on document ready -->
+		<script type="text/javascript">
+		
+					
+			var qsParm = new Array();
+			qsParm['study'] = null;
+			qsParm['project'] = null;
+			qs();		
+		
+			function qs() {	
+				var query = window.location.search.substring(1);
+				var parms = query.split('&');
+				for (var i=0; i<parms.length; i++) {
+					var pos = parms[i].indexOf('=');
+					if (pos > 0) {
+						var key = parms[i].substring(0,pos);
+						var val = parms[i].substring(pos+1);
+						qsParm[key] = val;
+					}
+				}
+			}
+		
+			var study = qsParm['study'];
+			var proj = qsParm['project'];
+
+			var chart;
+			$(document).ready(function() {
+				
+				// define the options
+				var options = {
+			
+					chart: {
+						renderTo: 'container',
+                        zoomType: 'x',
+                        margin: [ 50, 50, 100, 80]
+					},
+					
+					title: {
+						text: 'Cumulative sequencing statistics for ' + study
+					},
+					
+					subtitle: {
+						text: 'Source: Warehouse 2'
+					},
+					
+					xAxis: {
+						type: 'datetime',
+						tickInterval: 28 * 24 * 3600 * 1000, // 28 days
+						tickWidth: 0,
+						gridLineWidth: 1,
+
+                        showLastLabel: true,
+
+						labels: {
+							rotation: -45,
+							align: 'right',
+							x: 3,
+							y: 10
+						},
+// 						dateTimeLabelFormats: { // don't display the dummy year
+//             				month: '%b',
+//             				year: '%e. %b'
+//          				},
+						maxZoom: 28 * 24 * 3600000, // 28 days
+
+         				
+					},
+					
+					yAxis: [{ // left y axis
+						title: {
+							text: null
+						},
+						labels: {
+							align: 'left',
+ 							x: -40,
+ 							y: 3,
+							formatter: function() {
+								return Highcharts.numberFormat(this.value, 0);
+							}
+						},
+						showFirstLabel: true,
+						min: 0
+					}, { // right y axis
+						linkedTo: 0,
+						gridLineWidth: 0,
+						opposite: true,
+						title: {
+							text: null
+						},
+						labels: {
+							align: 'right',
+							x: 40,
+							y: 3,
+							formatter: function() {
+								return Highcharts.numberFormat(this.value, 0);
+							}
+						},
+						showFirstLabel: false,
+						min: 0
+					}],
+					
+					legend: {
+						align: 'left',
+						verticalAlign: 'top',
+						y: 20,
+						floating: true,
+						borderWidth: 0
+					},
+					
+					tooltip: {
+						shared: true,
+						crosshairs: true
+					},
+					
+					plotOptions: {
+						series: {
+							cursor: 'pointer',
+							point: {
+								events: {
+									click: function() {
+										hs.htmlExpand(null, {
+											pageOrigin: {
+												x: this.pageX, 
+												y: this.pageY
+											},
+											headingText: this.series.name,
+											maincontentText: Highcharts.dateFormat('%A, %b %e, %Y', this.x) +':<br/> '+ 
+												this.y +' requests',
+											width: 200
+										});
+									}
+								}
+							},
+							marker: {
+								lineWidth: 1
+							}
+						}
+					},
+					
+// 					series: [{
+// 						name: 'Requested',
+// 						lineWidth: 4,
+// 						marker: {
+// 							radius: 4
+// 						}
+// 					}, {
+// 						name: 'Run'
+// 					}, {
+// 						name: 'Analysed'
+// 					}, {
+// 						name: 'Archived'
+// 					}
+// 					]
+				};
+				
+				
+				// Load data asynchronously using jQuery. On success, add the data
+				// to the options and initiate the chart.
+				// This data is obtained by exporting a GA custom report to TSV.
+				// http://api.jquery.com/jQuery.get/
+// 				jQuery.get(projdata, null, function(tsv, state, xhr) {
+// 					var lines = [],
+// 						listen = false,
+// 						date,
+// 						
+// 						// set up the two data series
+// 						
+// 						requested = [],
+// 						runner = [],
+// 						analysis = [],
+// 						archived = [];
+// 						
+// 					// inconsistency
+// 					if (typeof tsv !== 'string') {
+// 						tsv = xhr.responseText;
+// 					}
+// 					
+// 					// split the data return into lines and parse them
+// 					tsv = tsv.split(/\n/g);
+// 					jQuery.each(tsv, function(i, line) {
+// 			
+// 						// listen for data lines between the Graph and Table headers
+// 						if (tsv[i - 3] == '# Graph') {
+// 							listen = true;
+// 						} else if (line == '' || line.charAt(0) == '#') {
+// 							listen = false;
+// 						}
+// 						
+// 						// all data lines start with a double quote
+// 						if (listen) {
+// 							line = line.split(/\t/);
+// 							
+// 							cal = line[0].split('-');
+// 					            
+// 					        date = Date.UTC(cal[0], cal[1] - 1, cal[2]);
+// 							
+// // 							date = Date.parse(line[0] +' UTC');
+// 							if (line[1] != '-') {
+// 								requested.push([
+// 									date, 
+// 									parseInt(line[1], 10)
+// 								]);
+// 							}
+// 							if (line[2] != '-') {
+// 								runner.push([
+// 									date, 
+// 									parseInt(line[2], 10)
+// 								]);
+// 							}
+// 							if (line[3] != '-') {	
+// 								analysis.push([
+// 									date, 
+// 									parseInt(line[3], 10)
+// 								]);
+// 							}	
+// 							if (line[4] != '-') {	
+// 								archived.push([
+// 									date, 
+// 									parseInt(line[4], 10)
+// 								]);
+// 							}							
+// 						}
+// 					});
+// 					
+// 					options.series[0].data = requested;
+// 					options.series[1].data = runner;
+// 					options.series[2].data = analysis;
+// 					options.series[3].data = archived;
+// 					
+// 					chart = new Highcharts.Chart(options);
+// 				});
+            function onDataReceived(series) {
+				options.series = series ;
+				chart = new Highcharts.Chart(options);
+            }
+            var projurl = '/cgi-bin/teams/team145/dev/production_stats/production_stats.pl?study=' + proj
+            $.ajax( {url: projurl,
+                     method: 'GET',
+                     dataType: 'json',
+                     success: onDataReceived
+             });
+					
+		
+			});
+				
+		</script>
+		
+		<!-- Additional files for the Highslide popup effect -->
+		<script type="text/javascript" src="http://www.highcharts.com/highslide/highslide-full.min.js"></script>
+		<script type="text/javascript" src="http://www.highcharts.com/highslide/highslide.config.js" charset="utf-8"></script>
+		<link rel="stylesheet" type="text/css" href="http://www.highcharts.com/highslide/highslide.css" />
+	</head>
+	<body>
+		<h2 align="center" style="font: normal 900 1.5em arial"><a href="http://intwebdev.sanger.ac.uk/cgi-bin/teams/team145/dev/production_stats/uk10k_production_stats.pl">UK10K Production Statistics</a></h2>
+		<!-- 3. Add the container -->
+		<div id="container" style="align: center; width: 1000px; height: 600px; margin: 5 auto"></div>
+		
+				
+	</body>
+</html>

@@ -1,0 +1,28 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my ($file, $help);
+
+GetOptions(
+    'f|file=s'      =>  \$file,
+    'h|help'	    =>  \$help,
+);
+
+($file && !$help) or die <<USAGE;
+    Usage: $0 -f file 
+USAGE
+
+open BAMS, "<", $file;
+while ( <BAMS> ) {
+	chomp;
+	my $bai = $_.'.bai';
+	system qq[echo 'samtools index $_ $bai' | bsub -M8000000 -R'select[mem>8000] rusage[mem=8000]' -o index_bam.out];
+}

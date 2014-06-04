@@ -1,0 +1,68 @@
+#!/usr/bin/env perl
+
+=head1 NAME
+
+irods_bam_import_scheduler
+
+=head1 SYNOPSIS
+
+Schedule irods_bam_import jobs as a job array limited to 15 iput commands for exome studies and 10 for wgs at any one time
+
+=head1 DESCRIPTION
+
+This script is used in conjunction with irods_bam_import to import bam files of samples in a release into irods.
+ 
+The command line parameters to pass are:
+    -f   The location of the release_bams.fofn for the study
+    -r   The release name (this is important as it is stored in the bam file metadata on irods
+
+=head1 AUTHOR
+
+jm23@sanger.ac.uk
+
+=cut
+
+use strict;
+use warnings;
+use Getopt::Long;
+use File::Basename;
+
+my ($fofn, $help);
+
+GetOptions(
+    'f|fofn=s'      =>  \$fofn,
+    'h|help'	    =>  \$help,
+);
+
+($fofn && !$help) or die <<USAGE;
+    Usage: $0 -f fofn_of_snp_files  
+USAGE
+
+
+
+open FOFN, "<", $fofn;
+open MAPP, ">", 'sample_mapping.txt';
+my $snp_index = 0;
+while ( <FOFN> ) {
+	chomp;
+	$snp_index++;
+	my $filepath = $_;
+	my $sample = basename( $filepath );
+	my $tmp_snp = "remapping_snps-$snp_index";
+    system qq[ln -s $filepath $tmp_snp];
+    print MAPP "$snp_index\t$sample\n";
+}
+close MAPP;
+close FOFN;
+
+#STEP 1: get remapping data
+system qq[echo 'perl /nfs/users/nfs_j/jm23/work/web/current/import_scripts/new_remapper/remapping_18_19_all -f remapping_snps-\${LSB_JOBINDEX}' | bsub -J "remap_step1[1-$snp_index]%100" -M4000000 -R'select[mem>4000] rusage[mem=4000]' -o remap_step1_%I.out];
+
+#STEP 2: perform remapping
+system qq[echo 'perl AssemblyMapper.pl -s human -f remapping_snps-\${LSB_JOBINDEX}_data_for_remapping > remapping_snps-\${LSB_JOBINDEX}_remapping_19'| bsub -w 'ended(remap_step1)' -J "remap_step2[1-$snp_index]%40" -M4000000 -R'select[mem>4000] rusage[mem=4000]' -o remap_step2_%I.out];
+
+#STEP 3: rewrite mapping to new snp file
+system qq[echo 'perl /nfs/users/nfs_j/jm23/work/web/current/import_scripts/new_remapper/final_remapping_all -s remapping_snps-\${LSB_JOBINDEX} -r remapping_snps-\${LSB_JOBINDEX}_remapping_19 -i \${LSB_JOBINDEX} ' | bsub -w 'ended(remap_step2)' -J "remap_step3[1-$snp_index]%100" -M4000000 -R'select[mem>4000] rusage[mem=4000]' -o remap_step3_%I.out];
+
+#tidy up the tmp files
+system qq[echo 'rm remap* sample_mapping.txt' | bsub -w 'ended(remap_step3)' -o tidyup.out];

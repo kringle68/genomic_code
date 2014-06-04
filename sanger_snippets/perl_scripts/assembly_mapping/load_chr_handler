@@ -1,0 +1,84 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use DBI;
+use Carp;
+
+my ($db, $bcp, $help);
+
+GetOptions(
+    'd|db=s'       =>  \$db,
+    'f|file=s'     =>  \$bcp,
+    'h|help'	   =>  \$help,
+);
+
+($db && $bcp && !$help) or die <<USAGE;
+    Usage: $0 -d db -f path_bcp_file 
+USAGE
+
+#vrtrack database connection parameters (set in env)
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+
+#database connection handle
+my $dbh = DBI->connect("DBI:mysql:host=$HOST:port=$PORT;database=$db", $WRITE_USER, $WRITE_PASS, {'AutoCommit' => 0, 'RaiseError' => 1, 'PrintError'=>0});
+croak "Can't connect to $db database\n" unless $dbh;
+
+#truncate statements
+my $sql_truncate = qq[TRUNCATE TABLE SNP_chr_pos_ref];
+my $tr_sth = $dbh->prepare($sql_truncate);
+$tr_sth->execute();
+ 
+#Insert SQL statements
+my $sql_insert_link_mapping = "INSERT into SNP_chr_pos_ref(snp_id, chr, pos, orien) VALUES (?,?,?,?)";
+my $link_sth = $dbh->prepare($sql_insert_link_mapping);
+
+croak "$bcp file not found\n" unless -e $bcp;
+
+open BCP, "<", $bcp;
+
+my $row_count = 0;
+my $start_time = Benchmark->new;
+my $split_time;
+my @linkstore = ();
+#$dbh->begin_work();
+while ( <BCP> ) {	
+    #last if $row_count > 65000; 
+    chomp;
+    my @mapping = split("\t", $_);
+    splice @mapping, 4;
+    $mapping[1] = '-' unless $mapping[1];
+    $mapping[2] = '-' unless $mapping[2];
+    $mapping[3] = '-' unless $mapping[3];
+    $mapping[0] = 'rs'.$mapping[0];
+    push @linkstore, [@mapping];
+    $row_count++;
+    if ( $row_count % 150000 == 0 ) {
+	    foreach my $link (@linkstore) {
+		    $link_sth->execute(@$link);
+		}		
+		@linkstore = ();
+		$split_time = Benchmark->new;
+		my $split_diff_time = timediff($split_time, $start_time);
+		print "$row_count rows inserted in ",timestr($split_diff_time, 'noc'),"\n";
+	}
+}
+foreach my $link (@linkstore) {
+    $link_sth->execute(@$link);
+}		
+$dbh->commit(); 
+
+close BCP;
+$link_sth->finish();
+$dbh->disconnect();
+
+my $end_time = Benchmark->new;
+my $update_time = timediff($end_time, $start_time);
+print "Successfully inserted $row_count rows into SNP_chr_pos_ref tables in ",timestr($update_time, 'noc'),".\n";

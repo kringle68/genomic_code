@@ -1,0 +1,61 @@
+#!/usr/bin/env perl
+
+use VertRes::Utils::VRTrackFactory;
+use Getopt::Long;
+use Carp;
+
+use strict;
+use warnings;
+
+my ($db, $help);
+
+GetOptions(
+    'd|database=s' 		=>  \$db,
+    'h|help'	        =>  \$help,
+);
+
+(!$help && $db) or die <<USAGE;
+    Usage: $0 -d vrtrack_db
+USAGE
+
+my $vrtrack = VertRes::Utils::VRTrackFactory->instantiate(database => $db, mode => 'rw');
+croak "Can't connect to $db tracking database\n" unless $vrtrack;
+
+my $sql_current_md5 = qq[SELECT f.lane_id, f.name, f.md5, l.withdrawn from latest_file f, latest_lane l where f.lane_id = l.lane_id and md5 is not null];
+my $sql_update_md5 = qq[UPDATE file set md5 = ? where lane_id = ? and name = ?];
+my $sth_md5 = $vrtrack->{_dbh}->prepare($sql_current_md5);
+my $sth_update = $vrtrack->{_dbh}->prepare($sql_update_md5);
+
+open OUTFILE, '>', "$db.log";
+
+if ($sth_md5->execute()) {
+	my ($lane, $name, $md5, $withdrawn);
+	$sth_md5->bind_columns(undef, \$lane, \$name, \$md5, \$withdrawn);
+	while ($sth_md5->fetch) {
+		if ( $withdrawn ) {
+			print OUTFILE "WITHDRAWN: $name\n";
+			next;
+		}
+		my $coll = (split('_', $name))[0]; 
+		my $irods_bam = "/seq/$coll/$name";
+		my $ils = `ils $irods_bam 2>&1`;
+		if ( $ils =~ /^ERROR/ ) {
+			print OUTFILE "No iRODS bam file: $irods_bam\n";
+			next;
+		}
+		#my $chksum = `imeta ls -d $irods_bam md5`;
+		my $chksum = `ichksum $irods_bam`;
+        my ($irods_md5) = $chksum =~ m/\b([0-9a-f]{32})\b/i;
+		unless ( $irods_md5 ) {
+            print OUTFILE "MD5 from irods does not match MD5 regex for $irods_bam\n";
+            next;
+        }
+        if ($md5 ne $irods_md5) {
+            $sth_update->execute($irods_md5,$lane,$name);
+            print OUTFILE "MISMATCH: $name, $md5, $irods_bam, $irods_md5\n";
+        }
+        else {
+		    print OUTFILE "OKAY: $name, $md5\n";
+		}
+	}
+}

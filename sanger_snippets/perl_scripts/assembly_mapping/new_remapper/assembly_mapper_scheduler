@@ -1,0 +1,41 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+use File::Basename;
+
+my ($fofn, $help);
+
+GetOptions(
+    'f|fofn=s'      =>  \$fofn,
+    'h|help'	    =>  \$help,
+);
+
+($fofn && !$help) or die <<USAGE;
+    Usage: $0 -f fofn_of_snp_files  
+USAGE
+
+open FOFN, "<", $fofn;
+while ( <FOFN> ) {
+	chomp;
+	my $filepath = $_;
+	my $sample = basename( $filepath );
+	open CHR, "<", $filepath;
+	my $remap_dir = '/nfs/users/nfs_j/jm23/jm23/GWAS_genotypes_WGS/double_check/GWAS_genotypes_WGS/remapping_gtype';
+	my %chr;
+	while ( <CHR> ) {
+		chomp;
+	    my $ch = (split(' ', $_))[0];
+	    $chr{$ch} = 1;
+	}
+    my @chr_arr = sort {$a <=> $b} keys %chr;
+    for my $chr ( @chr_arr ) {
+	    system qq[echo 'perl $remap_dir/AssemblyMapper.pl -s human -f $remap_dir/$sample\_chr$chr\_data_for_remapping > $remap_dir/$sample\_chr$chr\_remapping_19' | bsub -M8000000 -R'select[mem>8000] rusage[mem=8000]' -o $remap_dir/$sample\_remapping_19_chr$chr.out];
+	}
+}

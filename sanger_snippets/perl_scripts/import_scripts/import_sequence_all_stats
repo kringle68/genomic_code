@@ -1,0 +1,61 @@
+#!/usr/bin/env perl
+
+use VRTrack::VRTrack;
+use VertRes::Utils::VRTrackFactory;
+use Data::Dumper;
+use Carp;
+use DBI;
+use strict;
+use warnings;
+
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+my $web_db = 'vrtrack_web_index';
+my $webdbh = DBI->connect("DBI:mysql:host=mcs10:port=3306;database=$web_db", "vreseq_rw", "t3aml3ss", {'RaiseError' => 1, 'PrintError'=>0});
+
+my @vrtrack_dbs = ('vrtrack_uk10k_cohort', 'vrtrack_uk10k_obesity', 'vrtrack_uk10k_rare', 'vrtrack_uk10k_neuro');
+
+my $select_db_stats = "select round(sum(a.raw)/1e9) as raw, round(sum(a.rmdp)/1e9) as rmdp, b.UTC from
+(SELECT m.raw_bases as raw, m.rmdup_bases_mapped as rmdp, l.lane_id as lane 
+from latest_sample s, latest_library lib, latest_lane l, latest_mapstats m 
+where s.sample_id = lib.sample_id and lib.library_id = l.library_id 
+and l.lane_id = m.lane_id) a, (select unix_timestamp(date(min(n.changed))) as UTC, n.lane_id as lane from lane n group by n.lane_id) b where a.lane = b.lane group by b.UTC";
+
+my $insert_current_stats = "insert into management_all_sequences(raw_seq, rmdp, utc) values (?,?,?)";
+my $sth_in = $webdbh->prepare($insert_current_stats);
+
+my $sql_del = qq[TRUNCATE TABLE management_all_sequences];
+my $sth_del = $webdbh->prepare($sql_del);
+croak "Unable to truncate table management_all_sequences\n" unless $sth_del->execute();
+
+my %utchash;
+
+for my $db ( @vrtrack_dbs ) {
+    my $dbh = DBI->connect("DBI:mysql:host=mcs10:port=3306;database=$db", "vreseq_ro",undef, {'RaiseError' => 1, 'PrintError'=>0});
+    my($raw, $rmdup, $utc);
+    my $sth = $dbh->prepare($select_db_stats);	
+    $sth->execute();
+    $sth->bind_columns(undef, \$raw, \$rmdup, \$utc);
+    while ($sth->fetch) {
+    	if (defined $raw && defined $rmdup) {
+    		if ( $utchash{$utc} ) {
+    			if ($raw)   { @{ $utchash{$utc} }[0] += $raw; }
+    			if ($rmdup) { @{ $utchash{$utc} }[1] += $rmdup; }
+    		}	
+    		else {
+    			push @{$utchash{$utc}}, ($raw, $rmdup);
+    		}	
+    	}	
+    }
+}
+
+my @utcarr = sort keys %utchash;
+
+foreach (@utcarr) {
+	$sth_in->execute(@{$utchash{$_}}[0], @{$utchash{$_}}[1], $_);
+}
+
+print "Successfully updated management_all_sequences in $web_db\n";

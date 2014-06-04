@@ -1,0 +1,48 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my ($file, $chr, $type, $help);
+
+GetOptions(
+    'f|file=s'      =>  \$file,
+    'c|chr=s'       =>  \$chr,
+    't|type=s'      =>  \$type,
+    'h|help'	    =>  \$help,
+);
+
+($file && $type && $chr && !$help) or die <<USAGE;
+    Usage: $0 -f snp_indel_file -c chromosome -t snp_or_indel
+USAGE
+
+#~ Slice object:
+  #~ coord_system:version:seq_region_name:start:end:strand
+#~ For example:
+  #~ chromosome:NCBIM37:X:1:10000:1
+
+my $stub = 'chromosome:NCBIM37:'.$chr.':';
+
+open FL1, "<", $file;
+open OUTF, ">", "/nfs/users/nfs_j/jm23/jm23/scratch/vcf_annotation/remapping/chr$chr\_$type\_data_for_remapping";
+#open OUTF, ">", "/nfs/users/nfs_j/jm23/jm23/scratch/vcf_annotation/remapping/chr$chr\_coords_for_remapping";
+
+while ( <FL1> ) {
+	chomp;
+    my @mapping = split("\t", $_);
+    my $pos;
+    if ( (looks_like_number($mapping[0]) && looks_like_number($chr) && $mapping[0] == $chr) || (!looks_like_number($mapping[0]) && (!looks_like_number($chr)) && $mapping[0] eq $chr) ) {
+	    $pos = $mapping[1];
+	    print OUTF $stub.$pos.':'.$pos.":\n";
+	    #print OUTF "chr$chr\t$pos\t$pos\n";
+	}
+}    
+
+close OUTF;
+close FL1;

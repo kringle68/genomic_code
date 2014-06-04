@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my ($file, $help);
+
+GetOptions(
+    'f|file=s'      =>  \$file,
+    'h|help'	    =>  \$help,
+);
+
+($file && !$help) or die <<USAGE;
+    Usage: $0 -f map_file  
+USAGE
+
+open CHR, "<", $file;
+my %chr;
+while ( <CHR> ) {
+	chomp;
+	my $ch = (split(' ', $_))[0];
+	$chr{$ch} = 1;
+}
+
+my @chr_arr = sort {$a <=> $b} keys %chr;
+my $study = (split('\.', $file))[0];
+my $dir = '/nfs/users/nfs_j/jm23/jm23/GWAS_genotypes_WGS/double_check/GWAS_genotypes_WGS/remapping';
+
+for my $chr ( @chr_arr ) {
+	system qq[echo 'sort -k 4 -n $dir/$study\_chr$chr\_final_mapping_19 > $dir/$study\_chr$chr\_final_mapping_19_sorted' | bsub -M8000000 -R'select[mem>8000] rusage[mem=8000]' -o $study\_sort_mapping_$chr.out];
+}

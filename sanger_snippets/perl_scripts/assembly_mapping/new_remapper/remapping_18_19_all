@@ -1,0 +1,41 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+use File::Basename;
+
+my ($file, $help);
+
+GetOptions(
+    'f|file=s'      =>  \$file,
+    'h|help'	    =>  \$help,
+);
+
+($file && !$help) or die <<USAGE;
+    Usage: $0 -f snp_file
+USAGE
+
+#~ Slice object:
+  #~ coord_system:version:seq_region_name:start:end:strand
+#~ For example:
+  #~ chromosome:NCBIM37:X:1:10000:1
+
+#my $stub = 'chromosome:NCBI36:'.$chr.':';
+my $stub = 'chromosome:NCBI36:';#.$chr.':';
+print "opening $file\n";
+open FL1, "<", $file;
+open OUTF, ">", "$file\_data_for_remapping";
+while ( <FL1> ) {
+	chomp;
+    my @mapping = split("\t", $_);
+    print OUTF $stub.$mapping[0].':'.$mapping[1].':'.$mapping[1].":\n";
+}    
+
+close OUTF;
+close FL1;

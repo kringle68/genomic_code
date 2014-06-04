@@ -1,0 +1,68 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+use File::Basename;
+
+my ($chr, $snpfile, $help);
+
+GetOptions(
+    'c|chr=s'       =>  \$chr,
+    's|snpfile=s'   =>  \$snpfile,
+    'h|help'	    =>  \$help,
+);
+
+($snpfile && $chr && !$help) or die <<USAGE;
+    Usage: $0 -c chromosome -s sample
+USAGE
+
+my $dir = '/nfs/users/nfs_j/jm23/jm23/GWAS_genotypes_WGS/double_check/GWAS_genotypes_WGS/remapping_gtype';
+my $sample = basename( $snpfile );
+my $chr_file = "$dir/$sample\_chr$chr\_remapping_19";
+my $out_file = "$dir/$sample\_chr$chr\_final_mapping_19";
+
+#INPUTS
+#1, from assembly remapping:
+#chromosome:NCBIM37:1:3000054:3000054:1,chromosome:GRCm38:1:3009973:3009973:1
+#chromosome:NCBIM37:1:3000093:3000093:1,chromosome:GRCm38:1:3010012:3010012:1
+#2, from map file:
+#1       rs4074137       0       1016570
+#
+#Need to replace the pos in 2 with the pos in 1
+#[Split on ','; take [0] and [1]; split on ':'; take [3] (pos); add to hash key = [1][3], value = [0][3]]
+#Read file split line on "\t" - check if chr = $chr, then look in hash for [1]. If found, print to new pos_file....
+
+open CHR, "<", $chr_file;
+my %relmap;
+while ( <CHR> ) {
+    chomp;
+    my @rels = split(',', $_);
+    if ( scalar @rels == 2) {
+		my $key = (split(':', $rels[0]))[3];
+		my $value = (split(':', $rels[1]))[3];
+		$relmap{$key} = $value;
+	}
+}
+close CHR;
+
+open OUTF, ">", $out_file;
+
+open MAP, "<", $snpfile;
+while ( <MAP> ) {
+	chomp;
+    my @mapping = split(' ', $_);
+    if ( $mapping[0] == $chr ) {
+	    if ( $relmap{$mapping[1]} ) {
+			my $pos = $relmap{$mapping[1]};
+			print OUTF "$mapping[0]\t$pos\t$mapping[2]\n";
+		}
+	}
+}    
+close MAP;
+close OUTF;

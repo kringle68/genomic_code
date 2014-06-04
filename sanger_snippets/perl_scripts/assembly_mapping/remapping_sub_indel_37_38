@@ -1,0 +1,61 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my ($chr, $help);
+
+GetOptions(
+    'c|chr=s'       =>  \$chr,
+    'h|help'	    =>  \$help,
+);
+
+($chr && !$help) or die <<USAGE;
+    Usage: $0 -c chromosome
+USAGE
+
+my $dir = '/nfs/users/nfs_j/jm23/jm23/scratch/vcf_annotation/remapping';
+my $indel = 'indel_submission.dbsnp.rep.txt';
+#my $snp = 'snps.dbsnp.assay.rep.txt';
+my $link = "$dir/SNPSubSNPLink.bcp";
+
+my $read_file = "$dir/$indel";
+my $outfile = "$dir/out_sub_indel_remap_$chr.txt";
+open SSID, "<", $read_file;
+open OUTF, ">", $outfile;
+
+my %ssids;
+my $ssid_count = 0;
+while ( <SSID> ){
+	chomp;
+	my @mapping = split("\t", $_);
+	my @chrpos = split('_', $mapping[0]);
+	if ( scalar @chrpos == 4 && $chrpos[1] eq $chr ) {
+	    #$ssids{$mapping[1]} = "$chrpos[2]:$chrpos[3]";
+	    $ssids{$mapping[1]} = "$chrpos[2]";
+	    $ssid_count++;
+	}
+}
+close SSID;
+print STDERR "Obtained $ssid_count ss_ids for chromosome $chr\n";
+
+open LINK, "<", $link;
+while ( <LINK> ){
+	chomp;
+	my @mapping = split("\t", $_);
+	next unless $mapping[0] =~ /^[3,4]/;
+	if ( $ssids{$mapping[0]} ) {
+		#my @coords = split(':', $ssids{$mapping[0]});
+		my $pos = $ssids{$mapping[0]};
+		#print OUTF "$chr\t$coords[0]\t$coords[1]\trs$mapping[1]\n";
+		print OUTF "$chr\t$pos\trs$mapping[1]\n";
+	}
+}
+close LINK;
+close OUTF;

@@ -1,0 +1,15 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my @chr_arr = (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,'X','Y');
+for my $chr ( @chr_arr ) {
+	system qq[echo 'perl /nfs/users/nfs_j/jm23/work/web/current/import_scripts/remapping_sub_37_38 -c $chr' | bsub -M8000000 -R'select[mem>8000] rusage[mem=8000]' -o remapping_sub_$chr.out];
+}

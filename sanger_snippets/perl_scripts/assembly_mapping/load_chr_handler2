@@ -1,0 +1,60 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+
+my ($bcp, $species, $help);
+
+GetOptions(
+    'f|file=s'     =>  \$bcp,
+    's|species=s'  =>  \$species,
+    'h|help'	   =>  \$help,
+);
+
+($bcp && $species && !$help) or die <<USAGE;
+    Usage: $0 -f path_bcp_file -s species 
+USAGE
+
+
+croak "$bcp file not found\n" unless -e $bcp;
+
+open BCP, "<", $bcp;
+open MAPP, ">", "snp_chr_pos_mapping_$species.txt";
+
+my $row_count = 0;
+my $start_time = Benchmark->new;
+my $split_time;
+my @store;
+while ( <BCP> ) {	
+    chomp;
+    my @mapping = split("\t", $_);
+    splice @mapping, 4;
+    $mapping[1] = '-' unless $mapping[1];
+    $mapping[2] = '-' unless $mapping[2];
+    $mapping[3] = '-' unless $mapping[3];
+    $mapping[0] = 'rs'.$mapping[0];
+    push @store, join("\t", @mapping), "\n";
+    $row_count++;
+    if ( $row_count % 1000000 == 0 ) {
+	    foreach my $link (@store) {
+		    print MAPP $link;
+		}		
+		@store = ();
+		$split_time = Benchmark->new;
+		my $split_diff_time = timediff($split_time, $start_time);
+		print "$row_count rows written in ",timestr($split_diff_time, 'noc'),"\n";
+	} 
+}
+foreach my $link (@store) {
+    print MAPP $link;
+}
+close BCP;
+close MAPP;
+
+my $end_time = Benchmark->new;
+my $update_time = timediff($end_time, $start_time);
+print "Successfully wrote $row_count rows in ",timestr($update_time, 'noc'),".\n";

@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use DBI;
+use Carp;
+
+my ($chr, $db, $help);
+
+GetOptions(
+    'c|chr=s'      =>  \$chr,
+    'd|db=s'       =>  \$db,
+    'h|help'	   =>  \$help,
+);
+
+(($chr && $db) && !$help) or die <<USAGE;
+    Usage: $0 -c $chr -d db
+USAGE
+
+#vrtrack database connection parameters (set in env)
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+
+#database connection handle
+my $dbh = DBI->connect("DBI:mysql:host=$HOST:port=$PORT;database=$db", $WRITE_USER, $WRITE_PASS, {'AutoCommit' => 0, 'RaiseError' => 1, 'PrintError'=>0});
+croak "Can't connect to $db database\n" unless $dbh;
+
+#Delete SQL statement
+my $sql_delete_mapping = "DELETE from SNP_ss_rs_chr_map where chr = ?";
+my $sth_del = $dbh->prepare($sql_delete_mapping);
+$sth_del->execute($chr);
+
+#Insert SQL statement
+my $sql_insert_mapping = "INSERT into SNP_ss_rs_chr_map (chr, pos, subsnp_id, snp_id) values (?,?,?,?)";
+my $sth = $dbh->prepare($sql_insert_mapping);
+
+my $map_file = "/nfs/users/nfs_j/jm23/jm23/scratch/chrom_analyses/snp_ss_rs_mapping_$chr.txt";
+open MAP, "<", $map_file;
+my @mapstore = ();
+my $row_count = 0;
+while ( <MAP> ) {
+    chomp;
+    my @mapping = split("\t", $_);
+    push @mapstore, [@mapping];
+    $row_count++;
+    if ( $row_count % 150000 == 0 ) {
+	    foreach my $map (@mapstore) {
+		    $sth->execute(@$map);
+		}		
+		@mapstore = ();
+	}
+}
+foreach my $map (@mapstore) {
+    $sth->execute(@$map);
+}		
+$dbh->commit(); 
+close MAP;
+$sth->finish();
+$dbh->disconnect();

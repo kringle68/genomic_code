@@ -1,0 +1,43 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use Scalar::Util qw(looks_like_number);
+
+my ($file, $help);
+
+GetOptions(
+    'f|file=s'      =>  \$file,
+    'h|help'	    =>  \$help,
+);
+
+($file && !$help) or die <<USAGE;
+    Usage: $0 -f file 
+USAGE
+
+open BAMS, "<", $file;
+open OUTF, ">", 'sanger_irods_check';
+
+#~ ils /seq/6586/6586_6#1.bam
+#~ /seq/6586/6586_6#1.bam
+#~ ils /seq/6586/6586_6#111.bam
+#~ ERROR: lsUtil: srcPath /seq/6586/6586_6#111.bam does not exist or user lacks access permission
+
+while ( <BAMS> ) {
+	chomp;
+	my $zone = '/seq/';
+	my $lane = (split('_', $_))[0];
+	my $bam = $zone.$lane.'/'.$_;
+	my $ils = `ils $bam 2>&1`;
+	if ($ils =~ /^ERROR/) {
+	    print OUTF "MISSING: $bam\n";
+	}
+	else {
+		print OUTF "OKAY: $bam\n"; 
+	}
+}

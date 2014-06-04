@@ -1,0 +1,48 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use DBI;
+use Carp;
+
+my ($chr, $help);
+
+GetOptions(
+    'c|chr=s'       =>  \$chr,
+    'h|help'	    =>  \$help,
+);
+
+($chr && !$help) or die <<USAGE;
+    Usage: $0 -c chromosome 
+USAGE
+
+my $db = 'vrtrack_snp_mapping_mouse';
+
+#vrtrack database connection parameters (set in env)
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+
+#database connection handle
+my $dbh = DBI->connect("DBI:mysql:host=$HOST:port=$PORT;database=$db", $WRITE_USER, $WRITE_PASS, {'AutoCommit' => 0, 'RaiseError' => 1, 'PrintError'=>0});
+croak "Can't connect to $db database\n" unless $dbh;
+
+#Select SQL statements
+my $sql_select_mapping = "SELECT snp_id, pos from SNP_chr_pos_ref where chr = ? and pos <> 0";
+my $sth = $dbh->prepare($sql_select_mapping);
+
+open SNP, ">", "/nfs/users/nfs_j/jm23/jm23/scratch/vcf_annotation/snp_chr_pos_mouse_$chr.txt";
+
+my ($rsid, $pos);
+$sth->execute($chr);
+while (($rsid, $pos) = $sth->fetchrow_array()) {
+	print SNP "$chr\t$pos\t$rsid\n";
+}
+close SNP;
+$sth->finish();
+$dbh->disconnect();

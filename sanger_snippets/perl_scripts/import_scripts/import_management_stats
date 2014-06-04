@@ -1,0 +1,211 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use DBI;
+use CGI qw(:standard);
+use VRTrack::VRTrack;
+use VertRes::Utils::VRTrackFactory;
+use Carp;
+
+#What req_types are there?
+my $reqtype = "Paired end sequencing";
+
+#web_db connection parameters:
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+#warehouse connection:
+my $wh2_dbh = DBI->connect("DBI:mysql:host=mcs7:port=3379;database=sequencescape_warehouse", "warehouse_ro",undef,
+                             {'RaiseError' => 1, 'PrintError'=>0});
+
+my $web_db = 'vrtrack_web_index';
+my $webdb_dbh = VertRes::Utils::VRTrackFactory->instantiate(database => $web_db,
+                                                          mode => 'rw');
+croak "Can't connect to web tracking database\n" unless $webdb_dbh;
+
+my @uk10kdbs = qw(vrtrack_uk10k_neuro vrtrack_uk10k_obesity vrtrack_uk10k_rare vrtrack_uk10k_cohort);
+my @tables = qw(management_running_stats management_cumulative_stats tracking_database db_projects);
+
+my $last_updated = get_last_updated($webdb_dbh);
+
+if ($last_updated == 1) {
+	carp "Truncating stats tables as the import date has been reset to 1\n";
+	truncate_stats_tables($webdb_dbh);
+}
+
+my $sql_dbs = qq[SELECT t.db_name, t.db_id, d.project_id, d.project_name FROM $tables[2] t, $tables[3] d where t.db_id = d.db_id and t.db_name = ?];
+my $insert_cumul_sql = qq[INSERT INTO $tables[1] (db_name, project_name, status, request_type, total, date) VALUES (?,?,?,?,?,?)];
+my $insert_running_sql = qq[INSERT INTO $tables[0] (db_name, project_name, status, request_type, total, date) VALUES (?,?,?,?,?,?)];
+
+my $sth_dbs = $webdb_dbh->{_dbh}->prepare($sql_dbs);
+my $ins_sth = $webdb_dbh->{_dbh}->prepare($insert_cumul_sql);
+my $ins_run_sth = $webdb_dbh->{_dbh}->prepare($insert_running_sql);
+
+foreach (@uk10kdbs) {
+	if ($sth_dbs->execute($_)) {
+		my ($dbname, $dbid, $pid, $pname);
+		$sth_dbs->bind_columns(\($dbname, $dbid, $pid, $pname));
+		while ($sth_dbs->fetch) {
+      		get_management_stats($wh2_dbh, $ins_sth, $ins_run_sth, $dbname, $pname, $reqtype, $last_updated);
+		}
+	}                                                          
+}
+
+set_last_updated($webdb_dbh);
+
+sub get_status_hash {
+    my ($dbh) = @_;
+    my $sth = $wh2_dbh->prepare_cached(<<SQL);
+    select  id_run_status_dict, description from npg_run_status_dict;
+SQL
+
+    my($status, $desc, %statushash);
+    $sth->execute();
+    $sth->bind_columns(undef, \$status, \$desc);
+    while ($sth->fetch) {
+        $statushash{$status} = $desc;
+        $statushash{$desc} = $status;
+    }
+    return \%statushash;
+}
+
+sub get_management_stats {
+    my ($dbh, $ins_sth, $ins_run_sth, $db, $study, $reqtype, $last_updated) = @_;
+
+    my $reqlike = '%'.$reqtype;
+    my $statushash = get_status_hash;
+    my $statuskeys = join ",", @$statushash{("run pending","run complete", "run cancelled","analysis in progress", "analysis complete", "archival pending", "run archived")};
+    
+ 	# get requests
+    my $sth = $wh2_dbh->prepare_cached(<<SQL);
+    select unix_timestamp(date(created)) as UTC, 'requested', count(*) from requests r where r.is_current=1 and r.study_name = ? and r.state not in ("failed","cancelled") and r.request_type like ? group by UTC order by UTC;
+SQL
+
+    my($utc, $status, $count);
+    $sth->execute($study, $reqlike);
+    $sth->bind_columns(undef, \$utc, \$status, \$count);
+
+    my $req_tot = 0;
+    while ($sth->fetch) {
+        $req_tot += $count;
+        if ($utc >= $last_updated) {
+            $ins_sth->execute($db, $study, $status, $reqtype, $req_tot, $utc);
+        }
+      }    
+
+	$sth = $utc = $status = $count = undef;
+
+    $sth = $wh2_dbh->prepare_cached(<<SQL);
+    select unix_timestamp(date(n.date)) as UTC, id_run_status_dict, count(*) from npg_information npg, npg_run_status n, requests r where r.study_name = ? and request_type like ? and r.is_current=1 and r.state != "cancelled" and r.internal_id = npg.request_id and npg.id_run = n.id_run and id_run_status_dict in ($statuskeys) group by UTC, n.id_run_status_dict order by UTC;
+SQL
+    $sth->execute($study, $reqlike);
+    $sth->bind_columns(undef, \$utc, \$status, \$count);
+
+    my %jsonhash = ('Running' => [],
+                    'Analysing' => [],
+                    'Archiving' => [],
+                    );
+
+    # data arrive in date order, so can calculate running total
+    my ($run_tot, $analysis_tot, $archival_tot, $cumul_run_tot, $cumul_analysis_tot, $cumul_archival_tot) = (0,0,0,0,0,0);
+    while ($sth->fetch) {
+        my $state = $statushash->{$status};
+        if($state eq 'run pending'){
+            $run_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Running', $reqtype, $run_tot, $utc);
+            }	
+        }
+        elsif ($state eq 'run complete'){
+            $run_tot -= $count;
+            $cumul_run_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Running', $reqtype, $run_tot, $utc);
+            	$ins_sth->execute($db, $study, $state, $reqtype, $cumul_run_tot, $utc);
+            }	
+        }
+        elsif ($state eq 'run cancelled'){
+            $run_tot -= $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Running', $reqtype, $run_tot, $utc);
+        	}
+        }	
+        elsif($state eq 'analysis in progress'){
+            $analysis_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Analysing', $reqtype, $analysis_tot, $utc);
+            }	
+        }
+        elsif ($state eq 'analysis complete'){
+            $analysis_tot -= $count;
+            $cumul_analysis_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Analysing', $reqtype, $analysis_tot, $utc);
+				      $ins_sth->execute($db, $study, $state, $reqtype, $cumul_analysis_tot, $utc);
+			      }	
+        }
+        elsif($state eq 'archival pending'){
+            $archival_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Archiving', $reqtype, $archival_tot, $utc);
+            }
+        }
+        elsif ($state eq 'run archived'){ 
+            $archival_tot -= $count;
+            $cumul_archival_tot += $count;
+            if ($utc >= $last_updated) {
+            	$ins_run_sth->execute($db, $study, 'Archiving', $reqtype, $archival_tot, $utc);
+            	$ins_sth->execute($db, $study, $state, $reqtype, $cumul_archival_tot, $utc);
+            }	
+        }      
+        else {
+            die "state $state not recognised\n";
+        }
+    }
+}
+
+sub truncate_stats_tables {
+  my ($dbh) = @_;
+  my @truncate_tables = qw(management_running_stats management_cumulative_stats);
+  foreach (@truncate_tables) {
+    my $sql = qq[TRUNCATE TABLE $_];
+    my $sth = $webdb_dbh->{_dbh}->prepare($sql);
+  	croak "Unable to truncate table $_\n" unless $sth->execute();
+  }
+}
+
+sub get_last_updated {
+  my ($dbh) = @_;
+  my $date_sql = qq[SELECT imported_UTC from management_import_date where id = 1];
+  #tidy up entries that match the last_updated as they may have been added to after the update was run
+  my @check_tables = qw(management_running_stats management_cumulative_stats);
+  
+  my $sth = $webdb_dbh->{_dbh}->prepare($date_sql);
+  my $latest;
+  if ($sth->execute()) {
+	my ($date);
+		$sth->bind_col(1, \$date);
+		while ($sth->fetch) {
+			$latest = $date;
+		}
+	} 
+  foreach (@check_tables) {
+    my $del_sql = qq[DELETE FROM $_ where date = ?];
+    my $del_sth = $webdb_dbh->{_dbh}->prepare($del_sql);
+    croak "Unable to delete stats entries that match the last updated UTC value" unless $del_sth->execute($latest);
+  }  
+  return $latest;
+}
+
+sub set_last_updated {
+  my ($dbh) = @_;
+  my $sql = qq[UPDATE management_import_date set imported_UTC = UNIX_TIMESTAMP(date(NOW())) where id = 1];
+  my $sth = $webdb_dbh->{_dbh}->prepare($sql);
+  croak "Unable to update latest import date\n" unless $sth->execute;
+}
+
+print "Successfully updated $tables[0], $tables[1] in $web_db\n";

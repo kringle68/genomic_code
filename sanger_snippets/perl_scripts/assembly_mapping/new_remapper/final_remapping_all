@@ -1,0 +1,77 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+no warnings 'uninitialized';
+use Getopt::Long;
+use Benchmark;
+use Carp;
+use Data::Dumper;
+use File::Spec::Functions qw(rel2abs);
+use Scalar::Util qw(looks_like_number);
+use File::Basename;
+
+#my ($remapfile, $snpfile, $outfile, $index, $help);
+my ($remapfile, $snpfile, $index, $help);
+
+GetOptions(
+    #'o|out=s'       =>  \$outfile,
+    'r|remap=s'     =>  \$remapfile,
+    's|snpfile=s'   =>  \$snpfile,
+    'i|index=i'     =>  \$index,
+    'h|help'	    =>  \$help,
+);
+
+($remapfile && $snpfile && $index && !$help) or die <<USAGE;
+    Usage: $0 -r remapping_file -s snp_file -i index
+USAGE
+
+#INPUTS
+#1, from assembly remapping:
+#chromosome:NCBIM37:1:3000054:3000054:1,chromosome:GRCm38:1:3009973:3009973:1
+#chromosome:NCBIM37:1:3000093:3000093:1,chromosome:GRCm38:1:3010012:3010012:1
+#2, from map file:
+#1       rs4074137       0       1016570
+#
+#Need to replace the pos in 2 with the pos in 1
+#[Split on ','; take [0] and [1]; split on ':'; take [3] (pos); add to hash key = [1][3], value = [0][3]]
+#Read file split line on "\t" - check if chr = $chr, then look in hash for [1]. If found, print to new pos_file....
+
+open CHR, "<", $remapfile;
+my %relmap;
+while ( <CHR> ) {
+    chomp;
+    my @rels = split(',', $_);
+    if ( scalar @rels == 2) {
+		my $key = (split(':', $rels[0]))[3];
+		my @value = split(':', $rels[1]);
+		$relmap{$key} = $value[2].'_'.$value[3];
+	}
+}
+close CHR;
+
+my $sample;
+open SAMP, "<", 'sample_mapping.txt';
+while ( <SAMP> ) {
+	chomp;
+	my @line = split(' ', $_);
+	if ( $line[0] == $index ) {
+	    $sample = $line[1];
+	}
+}
+my $outfile = "Genotypes/$sample";
+open OUTF, ">", $outfile;
+
+open MAP, "<", $snpfile;
+while ( <MAP> ) {
+	chomp;
+    my @mapping = split(' ', $_);
+    if ( $relmap{$mapping[1]} ) {
+		my @chrpos = split('_', $relmap{$mapping[1]});
+		if ( $chrpos[0] == $mapping[0] ) {
+			print OUTF "$mapping[0]\t$chrpos[1]\t$mapping[2]\n";
+		}
+	}
+}    
+close MAP;
+close OUTF;

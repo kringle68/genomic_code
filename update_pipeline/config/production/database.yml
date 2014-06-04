@@ -1,0 +1,5 @@
+warehouse:
+  database: sequencescape_warehouse
+  host:     mcs7
+  port:     3379
+  user:     warehouse_ro

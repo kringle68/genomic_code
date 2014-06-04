@@ -1,0 +1,102 @@
+#!/usr/bin/env perl
+
+use DBI;
+use VertRes::Utils::VRTrackFactory;
+use Carp;
+
+
+use strict;
+use warnings;
+
+my $HOST = $ENV{VRTRACK_HOST};
+my $PORT = $ENV{VRTRACK_PORT} || 3306;
+my $WRITE_USER = $ENV{VRTRACK_RW_USER};
+my $WRITE_PASS = $ENV{VRTRACK_PASSWORD};
+
+my %dbparams = (host => $HOST, port => $PORT, user => $WRITE_USER, password => $WRITE_PASS);
+my $web_db = 'vrtrack_web_index';
+my $webconn = DBI->connect("dbi:mysql:$web_db;host=$dbparams{host};port=$dbparams{port}", $dbparams{user}, $dbparams{password}, { RaiseError => 0 });
+croak "Can't connect to web tracking database\n" unless ($webconn);
+
+my @tables = qw(map_view_lane map_view_project_mapper map_view_lane_mapper tracking_database );
+
+my $sql_dbs = qq[SELECT db_name, db_id FROM $tables[3]];
+my $sql_lane_insert = qq[INSERT INTO $tables[0] (db_id, project_id, project_name, db_lane_id, lane_name, library_name, is_improved, is_called, imported) VALUES (?,?,?,?,?,?,?,?, NOW())];
+my $sql_project_insert = qq[INSERT INTO $tables[1] (db_id, project_id, mapper_name,imported) VALUES (?,?,?,NOW())];
+my $sql_lane_mapper_insert = qq[INSERT INTO $tables[2] (db_id, db_lane_id, mapper_name, imported) VALUES (?,?,?, NOW())];
+
+my $sth_dbs = $webconn->prepare($sql_dbs);
+my $sth_lane_ins = $webconn->prepare($sql_lane_insert);
+my $sth_map_ins = $webconn->prepare($sql_lane_mapper_insert);
+my $sth_db_ins = $webconn->prepare($sql_project_insert);
+
+for my $i ( 0..2 ) {
+  my $sql_del = qq[TRUNCATE TABLE $tables[$i]];
+  my $sth_del = $webconn->prepare($sql_del);
+  croak "Unable to truncate table $tables[$i]\n" unless $sth_del->execute();
+}
+
+my %web_dbs = ();
+if ($sth_dbs->execute()) {
+	my ($name, $id);
+	$sth_dbs->bind_col(1, \$name);
+	$sth_dbs->bind_col(2, \$id);
+	while ($sth_dbs->fetch) {
+    $web_dbs{$name} = $id;
+	}
+}
+#~ #small fudge until I can figure out why kuusamo is causing trouble....
+#~ my @db_keys = keys %web_dbs;
+#~ my @db_names;
+#~ my $first = 'vrtrack_kuusamo';
+#~ foreach (@db_keys) {
+	#~ if ( $_ ne $first ) { push @db_names, $_; }
+#~ }
+#~ #unshift @db_names, $first;
+
+my @db_names = keys %web_dbs;
+
+for my $dbname ( @db_names ) {
+	my $vrtrack = VertRes::Utils::VRTrackFactory->instantiate(database => $dbname, mode => 'r');
+	croak "Can't connect to $dbname tracking database\n" unless ($vrtrack);
+	my $dbid = $web_dbs{$dbname};
+	my @projects = @{ $vrtrack->projects() };
+		
+	foreach my $project (@projects) {
+		my %mappers;
+	    my $projectID = $project->id();
+		my $pname = $project->name;
+    	my $samples = $project->samples();
+    	croak( "Cant get samples for project: $projectID" ) unless $samples;
+    	my @lanes;
+    	for my $sample (@$samples) {
+       		my @libraries = @{$sample->libraries()};
+    		for my $library ( @libraries ) {
+    			 my @lanes = @{ $library->lanes };
+    			 for my $lane ( @lanes ) {
+    			 	my $improved = $lane->is_processed('improved') ? 'yes' : 'no';
+    			 	my $called = $lane->is_processed('snp_called') ? 'yes' : 'no';
+    			 	carp "Unable to insert values for $lane->name\n" unless $sth_lane_ins->execute($dbid, $projectID, $pname, $lane->id(), $lane->name(), $library->name(), $improved, $called);
+					my @mappings = @{ $lane->mappings() };
+    			 	my %lane_mappers;
+    			 	foreach my $mapstat ( @mappings ) {
+    			 		if( $mapstat->mapper() && $mapstat->raw_bases() && $mapstat->raw_bases() > 0 ) {
+    			 			my $mapper = $mapstat->mapper();
+    			 			$lane_mappers{ $mapper->name().qq[ v].$mapper->version() } = 1;
+    			 		}
+        			}
+        			foreach ( keys %lane_mappers ) {
+        				carp "Unable to insert values for".$lane->name."\n" unless $sth_map_ins->execute($dbid, $lane->id, $_);
+        				$mappers{$_} = 1;	
+        			}
+        		}	
+        	}
+    	}
+    	#insert $mappers{key} into map_view_project_mapper
+    	foreach ( keys %mappers ) {
+    		carp "Unable to insert values for $pname\n" unless $sth_db_ins->execute($dbid, $projectID, $_);
+    	}	
+    }	
+    $vrtrack->{_dbh}->disconnect();
+}
+print "Successfully updated $tables[0], $tables[1], $tables[2] in $web_db\n";
